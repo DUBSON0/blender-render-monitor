@@ -24,7 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 <dict>
     <key>CFBundleName</key><string>Blender Render Monitor</string>
     <key>CFBundleDisplayName</key><string>Blender Render Monitor</string>
-    <key>CFBundleIdentifier</key><string>local.seldon.BlenderRenderMonitor</string>
+    <key>CFBundleIdentifier</key><string>io.github.dubson0.BlenderRenderMonitor</string>
     <key>CFBundleExecutable</key><string>BlenderRenderMonitor</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
