@@ -65,6 +65,7 @@ struct JobRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(job.title).font(.system(.headline, design: .rounded)).lineLimit(1)
+                        .layoutPriority(1)
                     Text(job.outputName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         .truncationMode(.head)
                 }
@@ -123,6 +124,7 @@ struct JobRow: View {
 
     private var frameText: String {
         let frame = job.isMidFrame ? job.info.currentFrame : (job.info.lastCompletedFrame ?? job.info.currentFrame)
+        guard job.hasRange else { return "Frame \(frame)" }
         return "Frame \(frame) of \(job.info.frameStart)–\(job.info.frameEnd)"
     }
 }
@@ -154,7 +156,11 @@ struct JobDetail: View {
                 if let elapsed = job.currentFrameElapsed(now: now) {
                     row("Current", currentFrameText(job, elapsed: elapsed))
                 }
-                row("Frames left", "\(job.framesLeft) of \(job.totalFrames)")
+                if let left = job.framesLeft, let total = job.totalFrames {
+                    row("Frames left", "\(left) of \(total)")
+                } else {
+                    row("Frames left", "unknown (reading frame range…)")
+                }
                 row("Time left", Format.duration(remaining))
                 if let remaining, state == .rendering {
                     row("Finishes", Format.clock(now.addingTimeInterval(remaining), relativeTo: now))
@@ -162,8 +168,13 @@ struct JobDetail: View {
                 Divider().gridCellColumns(2)
                 row("Rendered", "\(job.info.framesRendered) frame\(job.info.framesRendered == 1 ? "" : "s") this session")
                 row("Running for", Format.duration(now.timeIntervalSince1970 - job.info.startedAt))
-                row("Engine", engineText(job))
+                if !job.info.engine.isEmpty {
+                    row("Engine", engineText(job))
+                }
                 row("Output", job.info.outputPath)
+                if let log = job.info.logPath {
+                    row("Source", "Blender log \((log as NSString).lastPathComponent)")
+                }
                 row("Process", "PID \(job.info.pid)" + (job.isAlive ? "" : " (exited)")
                     + (job.info.background == true ? ", headless" : ""))
             }
@@ -335,7 +346,7 @@ struct MenuBarContent: View {
             Text("No active renders")
         }
         ForEach(store.activeJobs) { job in
-            Text("\(job.title): frame \(job.info.currentFrame)/\(job.info.frameEnd), "
+            Text("\(job.title): frame \(job.frameCounter), "
                 + "\(Format.duration(job.secondsRemaining(now: store.now))) left")
         }
         Divider()
@@ -357,7 +368,7 @@ struct MenuBarLabel: View {
         if let first = active.first {
             let soonest = active.compactMap { $0.secondsRemaining(now: store.now) }.min()
             let text = active.count == 1
-                ? "\(first.info.currentFrame)/\(first.info.frameEnd) · \(Format.duration(soonest))"
+                ? "\(first.frameCounter) · \(Format.duration(soonest))"
                 : "\(active.count) renders · \(Format.duration(soonest))"
             Label(text, systemImage: "film")
                 .labelStyle(.titleAndIcon)

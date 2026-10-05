@@ -14,6 +14,7 @@ final class JobStore {
     private(set) var jobs: [RenderJob] = []
     private(set) var now = Date()
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private let logMonitor = LogMonitor()
 
     init() {
         installHook()
@@ -34,11 +35,13 @@ final class JobStore {
         let files = (try? FileManager.default.contentsOfDirectory(
             at: Self.jobsDir, includingPropertiesForKeys: nil)) ?? []
         let decoder = JSONDecoder()
-        let loaded: [RenderJob] = files.filter { $0.pathExtension == "json" }.compactMap { url in
+        let hookJobs: [RenderJob] = files.filter { $0.pathExtension == "json" }.compactMap { url in
             guard let data = try? Data(contentsOf: url),
                   let info = try? decoder.decode(JobStatus.self, from: data) else { return nil }
-            return RenderJob(info: info, isAlive: Self.isBlenderRunning(pid: info.pid), file: url)
+            return RenderJob(info: info, isAlive: Self.isBlenderRunning(pid: info.pid), statusFile: url)
         }
+        let hookPIDs = Set(hookJobs.filter(\.isAlive).map(\.info.pid))
+        let loaded = hookJobs + logMonitor.update(excluding: hookPIDs, now: now)
         let sorted = loaded.sorted { a, b in
             let aActive = a.state(now: now).isActive, bActive = b.state(now: now).isActive
             if aActive != bActive { return aActive }
@@ -47,11 +50,12 @@ final class JobStore {
         if sorted != jobs { jobs = sorted }
     }
 
-    /// Removes the status files of Blender processes that have exited.
+    /// Removes renders whose Blender process has exited.
     func clearFinished() {
         for job in jobs where !job.isAlive {
-            try? FileManager.default.removeItem(at: job.file)
+            if let file = job.statusFile { try? FileManager.default.removeItem(at: file) }
         }
+        logMonitor.forgetExited()
         refresh()
     }
 

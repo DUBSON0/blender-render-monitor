@@ -32,6 +32,10 @@ struct JobStatus: Codable, Equatable {
     let frameStart: Int
     let frameEnd: Int
     let frameStep: Int
+    /// False when the job was read from a Blender log and its .blend frame range isn't known (yet).
+    var rangeKnown: Bool? = nil
+    /// Set when the job was read from a Blender log rather than reported by the hook.
+    var logPath: String? = nil
 }
 
 struct RenderJob: Identifiable, Equatable {
@@ -53,12 +57,16 @@ struct RenderJob: Identifiable, Equatable {
 
     let info: JobStatus
     let isAlive: Bool
-    let file: URL
+    /// The hook's status file; nil for jobs read from a Blender log.
+    let statusFile: URL?
 
-    var id: String { file.lastPathComponent }
+    var id: String { "\(info.pid)-\(Int(info.startedAt))" }
+    var hasRange: Bool { info.rangeKnown ?? true }
+    var frameCounter: String { hasRange ? "\(info.currentFrame)/\(info.frameEnd)" : "\(info.currentFrame)" }
 
     var title: String {
-        let name = (info.blendFile as NSString).lastPathComponent
+        var name = (info.blendFile as NSString).lastPathComponent
+        if name.isEmpty, let log = info.logPath { name = (log as NSString).lastPathComponent }
         let base = name.isEmpty ? "Untitled" : (name as NSString).deletingPathExtension
         return info.scene == "Scene" ? base : "\(base) · \(info.scene)"
     }
@@ -70,9 +78,11 @@ struct RenderJob: Identifiable, Equatable {
     }
 
     private var step: Int { max(1, info.frameStep) }
-    var totalFrames: Int { max(0, (info.frameEnd - info.frameStart) / step + 1) }
+    var totalFrames: Int? { hasRange ? max(0, (info.frameEnd - info.frameStart) / step + 1) : nil }
     var isMidFrame: Bool { info.status == "rendering" && info.currentFrameStartedAt != nil }
-    private var finishedLastFrame: Bool { (info.lastCompletedFrame ?? Int.min) + step > info.frameEnd }
+    private var finishedLastFrame: Bool {
+        !hasRange || (info.lastCompletedFrame ?? Int.min) + step > info.frameEnd
+    }
 
     func state(now: Date) -> State {
         let sinceUpdate = now.timeIntervalSince1970 - info.updatedAt
@@ -90,7 +100,8 @@ struct RenderJob: Identifiable, Equatable {
     }
 
     /// Frames still to render, including the one in progress.
-    var framesLeft: Int {
+    var framesLeft: Int? {
+        guard hasRange else { return nil }
         let from = isMidFrame ? info.currentFrame : (info.lastCompletedFrame ?? info.frameStart - step) + step
         guard from <= info.frameEnd else { return 0 }
         return (info.frameEnd - max(from, info.frameStart)) / step + 1
@@ -117,13 +128,13 @@ struct RenderJob: Identifiable, Equatable {
 
     /// Fraction of the frame range that is done, counting the part of the current frame already rendered.
     var progress: Double {
-        guard totalFrames > 0 else { return 0 }
-        let done = Double(totalFrames - framesLeft) + (sampleFraction ?? 0)
-        return min(1, max(0, done / Double(totalFrames)))
+        guard let total = totalFrames, let left = framesLeft, total > 0 else { return 0 }
+        let done = Double(total - left) + (sampleFraction ?? 0)
+        return min(1, max(0, done / Double(total)))
     }
 
     func secondsRemaining(now: Date) -> Double? {
-        let left = framesLeft
+        guard let left = framesLeft else { return nil }
         guard left > 0 else { return 0 }
         let elapsed = currentFrameElapsed(now: now)
         var perFrame = averageFrameSeconds
