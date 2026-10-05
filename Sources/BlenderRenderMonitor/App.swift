@@ -5,10 +5,10 @@ struct BlenderRenderMonitorApp: App {
     @State private var store = JobStore()
 
     var body: some Scene {
-        Window("Blender Renders", id: "main") {
+        Window("Blender Render Monitor", id: "main") {
             ContentView(store: store)
         }
-        .defaultSize(width: 520, height: 320)
+        .defaultSize(width: 540, height: 360)
 
         MenuBarExtra {
             MenuBarContent(store: store)
