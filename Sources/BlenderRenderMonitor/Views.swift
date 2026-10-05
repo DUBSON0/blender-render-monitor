@@ -63,6 +63,7 @@ struct JobRow: View {
     let job: RenderJob
     @State private var showDetail = false
     @State private var isHovered = false
+    @State private var confirmQuit = false
     @State private var hoverTask: Task<Void, Never>?
 
     var body: some View {
@@ -100,6 +101,11 @@ struct JobRow: View {
                     if job.sampleFraction != nil, let s = job.info.sample, let n = job.info.samples {
                         Text(verbatim: "· sample \(s)/\(n)")
                     }
+                    Spacer(minLength: 8)
+                    if let usage = job.usage {
+                        UsagePill(label: "GPU", value: Format.percent(usage.gpuPercent))
+                        UsagePill(label: "RAM", value: Format.bytes(usage.memoryBytes))
+                    }
                 }
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -124,14 +130,20 @@ struct JobRow: View {
                 }
             }
             .frame(minWidth: 90, alignment: .trailing)
-            if canControl && store.queueLength > 1 {
+            if job.isAlive {
                 VStack(spacing: 2) {
-                    Button { store.move(job, by: -1) } label: { Image(systemName: "chevron.up") }
-                        .help("Higher priority")
-                        .disabled(job.queuePosition == 1)
-                    Button { store.move(job, by: 1) } label: { Image(systemName: "chevron.down") }
-                        .help("Lower priority")
-                        .disabled(job.queuePosition == store.queueLength)
+                    if canControl && store.queueLength > 1 {
+                        Button { store.move(job, by: -1) } label: { Image(systemName: "chevron.up") }
+                            .help("Higher priority")
+                            .disabled(job.queuePosition == 1)
+                    }
+                    Button { confirmQuit = true } label: { Image(systemName: "xmark") }
+                        .help("Quit this render")
+                    if canControl && store.queueLength > 1 {
+                        Button { store.move(job, by: 1) } label: { Image(systemName: "chevron.down") }
+                            .help("Lower priority")
+                            .disabled(job.queuePosition == store.queueLength)
+                    }
                 }
                 .buttonStyle(.borderless)
                 .font(.system(size: 11, weight: .bold))
@@ -147,6 +159,21 @@ struct JobRow: View {
                 Button("Move Down") { store.move(job, by: 1) }
                 Button("Move to Bottom") { store.moveToBottom(job) }
             }
+            if job.isAlive {
+                Divider()
+                if state != .quitting {
+                    Button("Quit Render…") { confirmQuit = true }
+                }
+                Button("Force Quit") { store.quit(job, force: true) }
+            }
+        }
+        .confirmationDialog("Quit “\(job.title)”?", isPresented: $confirmQuit) {
+            Button("Quit Render", role: .destructive) { store.quit(job, force: false) }
+            Button("Force Quit", role: .destructive) { store.quit(job, force: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Blender stops and the frame in progress is lost. Frames already saved are kept. "
+                + "Use Force Quit if it doesn't respond.")
         }
         .padding(14)
         .background(
@@ -226,6 +253,12 @@ struct JobDetail: View {
                 if let finish = job.expectedFinish, state != .paused {
                     row("Finishes", Format.clock(finish, relativeTo: now))
                 }
+                if let usage = job.usage {
+                    Divider().gridCellColumns(2)
+                    row("GPU", Format.percent(usage.gpuPercent))
+                    row("Memory", "\(Format.bytes(usage.memoryBytes))  (peak \(Format.bytes(usage.peakMemoryBytes)))")
+                    row("CPU", Format.percent(usage.cpuPercent))
+                }
                 Divider().gridCellColumns(2)
                 row("Rendered", "\(job.info.framesRendered) frame\(job.info.framesRendered == 1 ? "" : "s") this session")
                 row("Running for", Format.duration(now.timeIntervalSince1970 - job.info.startedAt))
@@ -293,6 +326,7 @@ struct StateIcon: View {
         case .rendering: return "play.fill"
         case .queued: return "hourglass"
         case .paused: return "pause.fill"
+        case .quitting: return "xmark"
         case .idle: return "moon.zzz.fill"
         case .finished: return "checkmark"
         case .cancelled: return "xmark"
@@ -308,9 +342,25 @@ extension RenderJob.State {
         case .queued: Brand.indigo
         case .paused: .yellow
         case .finished: .green
-        case .stopped: .red
+        case .stopped, .quitting: .red
         case .idle, .cancelled: .secondary
         }
+    }
+}
+
+struct UsagePill: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(label).fontWeight(.semibold).foregroundStyle(Brand.orange)
+            Text(value).foregroundStyle(.primary.opacity(0.75))
+        }
+        .font(.system(size: 10, design: .rounded).monospacedDigit())
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.primary.opacity(0.06)))
     }
 }
 

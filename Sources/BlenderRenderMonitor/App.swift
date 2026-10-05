@@ -8,7 +8,7 @@ struct BlenderRenderMonitorApp: App {
         Window("Blender Render Monitor", id: "main") {
             ContentView(store: store)
         }
-        .defaultSize(width: 560, height: 420)
+        .defaultSize(width: 600, height: 420)
 
         MenuBarExtra {
             MenuBarContent(store: store)

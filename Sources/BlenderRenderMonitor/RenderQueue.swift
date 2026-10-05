@@ -17,6 +17,8 @@ final class RenderQueue {
 
     private static let file = JobStore.supportDir.appending(path: "queue.json")
     private(set) var state: State
+    /// Renders being quit; the queue leaves them running so they can exit.
+    private var terminating: Set<String> = []
 
     init() {
         state = (try? Data(contentsOf: Self.file)).flatMap { try? JSONDecoder().decode(State.self, from: $0) } ?? State()
@@ -46,14 +48,28 @@ final class RenderQueue {
         save()
     }
 
+    /// Takes a render out of the queue and lets its process run, so it can handle a quit signal.
+    func release(id: String) {
+        terminating.insert(id)
+        state.order.removeAll { $0 == id }
+        state.manuallyPaused.remove(id)
+        if let pid = state.stoppedByApp.removeValue(forKey: id) {
+            kill(pid, SIGCONT)
+            closePause(id, at: Date().timeIntervalSince1970)
+        }
+        save()
+    }
+
     func moveToTop(id: String) { move(id: id, by: -state.order.count) }
     func moveToBottom(id: String) { move(id: id, by: state.order.count) }
 
     /// Starts or stops processes to match the queue, and annotates jobs with their hold, pauses and schedule.
     func apply(to jobs: [RenderJob], now: Date) -> [RenderJob] {
         let t = now.timeIntervalSince1970
+        terminating.formIntersection(jobs.filter(\.isAlive).map(\.id))
         let queueable = jobs.filter { job in
-            job.isAlive && (state.stoppedByApp[job.id] != nil || job.state(now: now) == .rendering)
+            job.isAlive && !terminating.contains(job.id)
+                && (state.stoppedByApp[job.id] != nil || job.state(now: now) == .rendering)
         }
         let ids = Set(queueable.map(\.id))
         state.order.removeAll { !ids.contains($0) }

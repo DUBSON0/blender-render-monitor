@@ -40,11 +40,12 @@ struct JobStatus: Codable, Equatable {
 
 struct RenderJob: Identifiable, Equatable {
     enum State {
-        case rendering, queued, paused, idle, finished, cancelled, stopped
+        case rendering, queued, paused, quitting, idle, finished, cancelled, stopped
 
         var label: String {
             switch self {
             case .rendering: "Rendering"
+            case .quitting: "Quitting…"
             case .queued: "Queued"
             case .paused: "Paused"
             case .idle: "Idle"
@@ -75,6 +76,9 @@ struct RenderJob: Identifiable, Equatable {
     var queuePosition: Int?
     var expectedStart: Date?
     var expectedFinish: Date?
+    var usage: ResourceUsage?
+    /// Quit from this app; the process may still be shutting down.
+    var isQuitting = false
 
     /// Seconds between `from` and `to` during which the app had this render paused.
     func pausedSeconds(from: Double, to: Double) -> Double {
@@ -108,6 +112,7 @@ struct RenderJob: Identifiable, Equatable {
     }
 
     func state(now: Date) -> State {
+        if isQuitting { return isAlive ? .quitting : .stopped }
         if isAlive, let hold { return hold == .paused ? .paused : .queued }
         let sinceUpdate = now.timeIntervalSince1970 - info.updatedAt
         switch info.status {

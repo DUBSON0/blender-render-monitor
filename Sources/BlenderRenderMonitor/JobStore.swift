@@ -17,6 +17,8 @@ final class JobStore {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private let logMonitor = LogMonitor()
     @ObservationIgnored private let queue = RenderQueue()
+    @ObservationIgnored private let resources = ResourceMonitor()
+    @ObservationIgnored private var quitIDs: Set<String> = []
     private(set) var maxConcurrent: Int?
 
     init() {
@@ -46,6 +48,14 @@ final class JobStore {
 
     func togglePause(_ job: RenderJob) {
         queue.togglePause(id: job.id)
+        refresh()
+    }
+
+    /// Asks Blender to quit (SIGTERM), or kills it outright (SIGKILL) when `force` is set.
+    func quit(_ job: RenderJob, force: Bool) {
+        quitIDs.insert(job.id)
+        queue.release(id: job.id)
+        kill(job.info.pid, force ? SIGKILL : SIGTERM)
         refresh()
     }
 
@@ -84,7 +94,17 @@ final class JobStore {
             return true
         }
         let hookPIDs = Set(hookJobs.filter(\.isAlive).map(\.info.pid))
-        let loaded = queue.apply(to: hookJobs + logMonitor.update(excluding: hookPIDs, now: now), now: now)
+        let found = (hookJobs + logMonitor.update(excluding: hookPIDs, now: now)).map { job -> RenderJob in
+            var job = job
+            job.isQuitting = quitIDs.contains(job.id)
+            return job
+        }
+        let usage = resources.sample(pids: Set(found.filter(\.isAlive).map(\.info.pid)))
+        let loaded = queue.apply(to: found, now: now).map { job -> RenderJob in
+            var job = job
+            job.usage = job.isAlive ? usage[job.info.pid] : nil
+            return job
+        }
         let sorted = loaded.sorted { a, b in
             switch (a.queuePosition, b.queuePosition) {
             case let (x?, y?): return x < y
@@ -102,6 +122,7 @@ final class JobStore {
             if let file = job.statusFile { try? FileManager.default.removeItem(at: file) }
         }
         logMonitor.forgetExited()
+        quitIDs.formIntersection(jobs.filter(\.isAlive).map(\.id))
         refresh()
     }
 
