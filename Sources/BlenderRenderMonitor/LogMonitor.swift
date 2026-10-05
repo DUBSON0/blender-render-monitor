@@ -155,7 +155,8 @@ final class FrameRangeCache {
         process.terminationHandler = { _ in
             let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
             let line = output.split(separator: "\n").first { $0.hasPrefix("BRM_RANGE") }
-            let parts = line?.split(separator: " ").dropFirst().compactMap { Int($0) } ?? []            Task { @MainActor in
+            let parts = line?.split(separator: " ").dropFirst().compactMap { Int($0) } ?? []
+            Task { @MainActor in
                 if parts.count == 3 {
                     self.cache[key] = FrameRange(start: parts[0], end: parts[1], step: max(1, parts[2]))
                 }
