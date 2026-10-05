@@ -40,11 +40,13 @@ struct JobStatus: Codable, Equatable {
 
 struct RenderJob: Identifiable, Equatable {
     enum State {
-        case rendering, idle, finished, cancelled, stopped
+        case rendering, queued, paused, idle, finished, cancelled, stopped
 
         var label: String {
             switch self {
             case .rendering: "Rendering"
+            case .queued: "Queued"
+            case .paused: "Paused"
             case .idle: "Idle"
             case .finished: "Finished"
             case .cancelled: "Cancelled"
@@ -52,13 +54,34 @@ struct RenderJob: Identifiable, Equatable {
             }
         }
 
-        var isActive: Bool { self == .rendering }
+        /// Still has work to do: rendering now, or held by the queue or the user.
+        var isActive: Bool { self == .rendering || self == .queued || self == .paused }
+    }
+
+    /// Why the app is holding a render's process stopped.
+    enum Hold: Equatable { case paused, queued }
+
+    struct PauseInterval: Codable, Equatable {
+        var start: Double
+        var end: Double?
     }
 
     let info: JobStatus
     let isAlive: Bool
     /// The hook's status file; nil for jobs read from a Blender log.
     let statusFile: URL?
+    var hold: Hold?
+    var pauses: [PauseInterval] = []
+    var queuePosition: Int?
+    var expectedStart: Date?
+    var expectedFinish: Date?
+
+    /// Seconds between `from` and `to` during which the app had this render paused.
+    func pausedSeconds(from: Double, to: Double) -> Double {
+        pauses.reduce(0) { total, p in
+            total + max(0, min(to, p.end ?? .infinity) - max(from, p.start))
+        }
+    }
 
     var id: String { "\(info.pid)-\(Int(info.startedAt))" }
     var hasRange: Bool { info.rangeKnown ?? true }
@@ -85,6 +108,7 @@ struct RenderJob: Identifiable, Equatable {
     }
 
     func state(now: Date) -> State {
+        if isAlive, let hold { return hold == .paused ? .paused : .queued }
         let sinceUpdate = now.timeIntervalSince1970 - info.updatedAt
         switch info.status {
         case "cancelled":
@@ -92,7 +116,8 @@ struct RenderJob: Identifiable, Equatable {
         case "rendering":
             return isAlive ? .rendering : .stopped
         default:
-            if !isAlive { return finishedLastFrame ? .finished : .stopped }
+            // Its last render completed, so the process exited normally (stills often skip most of the range).
+            if !isAlive { return .finished }
             if finishedLastFrame { return .finished }
             // Scripts that render frame by frame complete one render job per frame.
             return sinceUpdate < 120 ? .rendering : .idle
@@ -111,14 +136,20 @@ struct RenderJob: Identifiable, Equatable {
     var averageFrameSeconds: Double? {
         let recent = info.frameTimes.suffix(10)
         guard !recent.isEmpty else { return nil }
-        return recent.map(\.seconds).reduce(0, +) / Double(recent.count)
+        return recent.map(activeSeconds).reduce(0, +) / Double(recent.count)
     }
 
-    var lastFrameSeconds: Double? { info.frameTimes.last?.seconds }
+    var lastFrameSeconds: Double? { info.frameTimes.last.map(activeSeconds) }
+
+    /// A frame's render time, not counting time it spent paused.
+    private func activeSeconds(_ t: JobStatus.FrameTime) -> Double {
+        max(0, t.seconds - pausedSeconds(from: t.finishedAt - t.seconds, to: t.finishedAt))
+    }
 
     func currentFrameElapsed(now: Date) -> Double? {
         guard isMidFrame, let start = info.currentFrameStartedAt else { return nil }
-        return max(0, now.timeIntervalSince1970 - start)
+        let end = now.timeIntervalSince1970
+        return max(0, end - start - pausedSeconds(from: start, to: end))
     }
 
     var sampleFraction: Double? {
@@ -140,7 +171,8 @@ struct RenderJob: Identifiable, Equatable {
         var perFrame = averageFrameSeconds
         var currentRemaining: Double?
         if isMidFrame, let reported = info.frameRemaining, let at = info.statsAt {
-            let left = max(0, reported - (now.timeIntervalSince1970 - at))
+            let end = now.timeIntervalSince1970
+            let left = max(0, reported - (end - at - pausedSeconds(from: at, to: end)))
             currentRemaining = left
             if let elapsed { perFrame = perFrame ?? elapsed + left }
         } else if let elapsed, let fraction = sampleFraction, elapsed > 2 {

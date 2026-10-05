@@ -32,6 +32,14 @@ struct ContentView: View {
         .tint(Brand.orange)
         .toolbar {
             ToolbarItemGroup {
+                Picker("Run", selection: Binding(get: { store.maxConcurrent }, set: { store.setMaxConcurrent($0) })) {
+                    Text("All at once").tag(Int?.none)
+                    Text("One at a time").tag(Int?.some(1))
+                    Text("Two at a time").tag(Int?.some(2))
+                    Text("Three at a time").tag(Int?.some(3))
+                }
+                .pickerStyle(.menu)
+                .help("How many renders run at once. The rest wait, paused, in queue order.")
                 Menu {
                     Button("Copy --python Argument") { store.copyHookArgument() }
                     Button("Show Hook Script in Finder") { store.revealHook() }
@@ -60,16 +68,33 @@ struct JobRow: View {
     var body: some View {
         let now = store.now
         let state = job.state(now: now)
+        let canControl = job.queuePosition != nil
         HStack(alignment: .center, spacing: 14) {
-            StateIcon(state: state)
+            if canControl {
+                Button { store.togglePause(job) } label: {
+                    StateIcon(state: state, showsControl: isHovered)
+                }
+                .buttonStyle(.plain)
+                .help(state == .paused ? "Resume" : "Pause")
+            } else {
+                StateIcon(state: state, showsControl: false)
+            }
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
+                    if let position = job.queuePosition, store.queueLength > 1 {
+                        Text("#\(position)")
+                            .font(.system(.caption, design: .rounded).weight(.bold).monospacedDigit())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(position == 1 ? AnyShapeStyle(Brand.fire) : AnyShapeStyle(Brand.indigo)))
+                    }
                     Text(job.title).font(.system(.headline, design: .rounded)).lineLimit(1)
                         .layoutPriority(1)
                     Text(job.outputName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         .truncationMode(.head)
                 }
-                RenderProgressBar(value: job.progress, active: state == .rendering)
+                RenderProgressBar(value: state == .finished ? 1 : job.progress, active: state == .rendering)
                 HStack {
                     Text(frameText)
                     if job.sampleFraction != nil, let s = job.info.sample, let n = job.info.samples {
@@ -89,9 +114,39 @@ struct JobRow: View {
                     Text(state.label)
                         .font(.system(.callout, design: .rounded).weight(.medium))
                         .foregroundStyle(state.color)
+                    if state == .queued, let start = job.expectedStart {
+                        Text("starts \(Format.clock(start, relativeTo: now))")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    } else if state == .paused, let remaining = job.secondsRemaining(now: now) {
+                        Text("\(Format.duration(remaining)) left")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
                 }
             }
             .frame(minWidth: 90, alignment: .trailing)
+            if canControl && store.queueLength > 1 {
+                VStack(spacing: 2) {
+                    Button { store.move(job, by: -1) } label: { Image(systemName: "chevron.up") }
+                        .help("Higher priority")
+                        .disabled(job.queuePosition == 1)
+                    Button { store.move(job, by: 1) } label: { Image(systemName: "chevron.down") }
+                        .help("Lower priority")
+                        .disabled(job.queuePosition == store.queueLength)
+                }
+                .buttonStyle(.borderless)
+                .font(.system(size: 11, weight: .bold))
+                .opacity(isHovered ? 1 : 0)
+            }
+        }
+        .contextMenu {
+            if canControl {
+                Button(state == .paused ? "Resume" : "Pause") { store.togglePause(job) }
+                Divider()
+                Button("Move to Top") { store.moveToTop(job) }
+                Button("Move Up") { store.move(job, by: -1) }
+                Button("Move Down") { store.move(job, by: 1) }
+                Button("Move to Bottom") { store.moveToBottom(job) }
+            }
         }
         .padding(14)
         .background(
@@ -161,9 +216,15 @@ struct JobDetail: View {
                 } else {
                     row("Frames left", "unknown (reading frame range…)")
                 }
-                row("Time left", Format.duration(remaining))
-                if let remaining, state == .rendering {
-                    row("Finishes", Format.clock(now.addingTimeInterval(remaining), relativeTo: now))
+                row("Time left", Format.duration(remaining) + (state == .rendering ? "" : " of rendering"))
+                if let position = job.queuePosition, store.queueLength > 1 {
+                    row("Queue", "#\(position) of \(store.queueLength)")
+                }
+                if state == .queued, let start = job.expectedStart {
+                    row("Starts", Format.clock(start, relativeTo: now))
+                }
+                if let finish = job.expectedFinish, state != .paused {
+                    row("Finishes", Format.clock(finish, relativeTo: now))
                 }
                 Divider().gridCellColumns(2)
                 row("Rendered", "\(job.info.framesRendered) frame\(job.info.framesRendered == 1 ? "" : "s") this session")
@@ -210,26 +271,32 @@ struct JobDetail: View {
 
 struct StateIcon: View {
     let state: RenderJob.State
+    /// Shows the pause/resume action instead of the state, for hover.
+    let showsControl: Bool
 
     var body: some View {
         ZStack {
             Circle()
-                .fill(state.color.opacity(0.15))
+                .fill(state.color.opacity(showsControl ? 0.3 : 0.15))
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(state == .rendering ? AnyShapeStyle(Brand.fire) : AnyShapeStyle(state.color))
-                .symbolEffect(.pulse, isActive: state == .rendering)
+                .symbolEffect(.pulse, isActive: state == .rendering && !showsControl)
         }
         .frame(width: 38, height: 38)
+        .contentShape(Circle())
     }
 
     private var symbol: String {
+        if showsControl { return state == .paused ? "play.fill" : "pause.fill" }
         switch state {
-        case .rendering: "play.fill"
-        case .idle: "pause.fill"
-        case .finished: "checkmark"
-        case .cancelled: "xmark"
-        case .stopped: "exclamationmark"
+        case .rendering: return "play.fill"
+        case .queued: return "hourglass"
+        case .paused: return "pause.fill"
+        case .idle: return "moon.zzz.fill"
+        case .finished: return "checkmark"
+        case .cancelled: return "xmark"
+        case .stopped: return "exclamationmark"
         }
     }
 }
@@ -238,6 +305,8 @@ extension RenderJob.State {
     var color: Color {
         switch self {
         case .rendering: Brand.orange
+        case .queued: Brand.indigo
+        case .paused: .yellow
         case .finished: .green
         case .stopped: .red
         case .idle, .cancelled: .secondary
@@ -297,12 +366,16 @@ struct HeaderView: View {
         guard !active.isEmpty else {
             return store.jobs.isEmpty ? "Waiting for Blender renders" : "No active renders"
         }
-        let rendering = active.count == 1 ? "1 render" : "\(active.count) renders"
-        guard let latest = active.compactMap({ $0.secondsRemaining(now: store.now) }).max() else {
-            return "\(rendering) in progress"
+        let states = active.map { $0.state(now: store.now) }
+        var parts = ["\(states.filter { $0 == .rendering }.count) rendering"]
+        let queued = states.filter { $0 == .queued }.count
+        let paused = states.filter { $0 == .paused }.count
+        if queued > 0 { parts.append("\(queued) queued") }
+        if paused > 0 { parts.append("\(paused) paused") }
+        if let latest = active.compactMap(\.expectedFinish).max() {
+            parts.append("done by \(Format.clock(latest, relativeTo: store.now))")
         }
-        let finish = Format.clock(store.now.addingTimeInterval(latest), relativeTo: store.now)
-        return "\(rendering) in progress · all done by \(finish)"
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -346,8 +419,14 @@ struct MenuBarContent: View {
             Text("No active renders")
         }
         ForEach(store.activeJobs) { job in
-            Text("\(job.title): frame \(job.frameCounter), "
-                + "\(Format.duration(job.secondsRemaining(now: store.now))) left")
+            let state = job.state(now: store.now)
+            Button {
+                store.togglePause(job)
+            } label: {
+                Text("\(state == .rendering ? "▶︎" : state == .paused ? "⏸" : "⏳") \(job.title): frame \(job.frameCounter), "
+                    + "\(Format.duration(job.secondsRemaining(now: store.now))) left")
+            }
+            .help(state == .paused ? "Resume" : "Pause")
         }
         Divider()
         Button("Show Renders") {
@@ -364,7 +443,7 @@ struct MenuBarLabel: View {
     let store: JobStore
 
     var body: some View {
-        let active = store.activeJobs
+        let active = store.renderingJobs
         if let first = active.first {
             let soonest = active.compactMap { $0.secondsRemaining(now: store.now) }.min()
             let text = active.count == 1

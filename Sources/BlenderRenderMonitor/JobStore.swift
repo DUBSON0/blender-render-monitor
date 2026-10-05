@@ -10,23 +10,61 @@ final class JobStore {
         .appending(path: "Library/Application Support/BlenderRenderMonitor")
     static let jobsDir = supportDir.appending(path: "jobs")
     static let hookURL = supportDir.appending(path: "render_monitor.py")
+    static let keepExitedFor: TimeInterval = 12 * 3600
 
     private(set) var jobs: [RenderJob] = []
     private(set) var now = Date()
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private let logMonitor = LogMonitor()
+    @ObservationIgnored private let queue = RenderQueue()
+    private(set) var maxConcurrent: Int?
 
     init() {
         installHook()
+        maxConcurrent = queue.maxConcurrent
         refresh()
         let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.queue.releaseQueued() }
+        }
     }
 
     var activeJobs: [RenderJob] { jobs.filter { $0.state(now: now).isActive } }
+    var renderingJobs: [RenderJob] { jobs.filter { $0.state(now: now) == .rendering } }
+
+    func setMaxConcurrent(_ value: Int?) {
+        queue.setMaxConcurrent(value)
+        maxConcurrent = value
+        refresh()
+    }
+
+    func togglePause(_ job: RenderJob) {
+        queue.togglePause(id: job.id)
+        refresh()
+    }
+
+    func move(_ job: RenderJob, by offset: Int) {
+        queue.move(id: job.id, by: offset)
+        refresh()
+    }
+
+    func moveToTop(_ job: RenderJob) {
+        queue.moveToTop(id: job.id)
+        refresh()
+    }
+
+    func moveToBottom(_ job: RenderJob) {
+        queue.moveToBottom(id: job.id)
+        refresh()
+    }
+
+    var queueLength: Int { jobs.filter { $0.queuePosition != nil }.count }
 
     func job(id: String) -> RenderJob? { jobs.first { $0.id == id } }
 
@@ -35,17 +73,25 @@ final class JobStore {
         let files = (try? FileManager.default.contentsOfDirectory(
             at: Self.jobsDir, includingPropertiesForKeys: nil)) ?? []
         let decoder = JSONDecoder()
-        let hookJobs: [RenderJob] = files.filter { $0.pathExtension == "json" }.compactMap { url in
+        var hookJobs: [RenderJob] = files.filter { $0.pathExtension == "json" }.compactMap { url in
             guard let data = try? Data(contentsOf: url),
                   let info = try? decoder.decode(JobStatus.self, from: data) else { return nil }
             return RenderJob(info: info, isAlive: Self.isBlenderRunning(pid: info.pid), statusFile: url)
         }
+        hookJobs.removeAll { job in
+            guard !job.isAlive, now.timeIntervalSince1970 - job.info.updatedAt > Self.keepExitedFor else { return false }
+            if let file = job.statusFile { try? FileManager.default.removeItem(at: file) }
+            return true
+        }
         let hookPIDs = Set(hookJobs.filter(\.isAlive).map(\.info.pid))
-        let loaded = hookJobs + logMonitor.update(excluding: hookPIDs, now: now)
+        let loaded = queue.apply(to: hookJobs + logMonitor.update(excluding: hookPIDs, now: now), now: now)
         let sorted = loaded.sorted { a, b in
-            let aActive = a.state(now: now).isActive, bActive = b.state(now: now).isActive
-            if aActive != bActive { return aActive }
-            return a.info.startedAt > b.info.startedAt
+            switch (a.queuePosition, b.queuePosition) {
+            case let (x?, y?): return x < y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            case (nil, nil): return a.info.startedAt > b.info.startedAt
+            }
         }
         if sorted != jobs { jobs = sorted }
     }
