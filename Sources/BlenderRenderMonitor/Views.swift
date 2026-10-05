@@ -1,12 +1,12 @@
 import SwiftUI
 
 enum Brand {
-    static let orange = Color(red: 0.96, green: 0.47, blue: 0.16)
-    static let amber = Color(red: 1.0, green: 0.73, blue: 0.22)
-    static let navy = Color(red: 0.09, green: 0.09, blue: 0.25)
-    static let indigo = Color(red: 0.16, green: 0.13, blue: 0.42)
-    static let fire = LinearGradient(colors: [orange, amber], startPoint: .leading, endPoint: .trailing)
-    static let night = LinearGradient(colors: [navy, indigo], startPoint: .topLeading, endPoint: .bottomTrailing)
+    /// The single accent: a muted copper, used sparingly.
+    static let copper = Color(red: 0.70, green: 0.47, blue: 0.29)
+    static let sage = Color(red: 0.42, green: 0.55, blue: 0.43)
+    static let brick = Color(red: 0.67, green: 0.31, blue: 0.27)
+    static let hairline = Color.primary.opacity(0.09)
+    static let wash = Color.primary.opacity(0.05)
 }
 
 struct ContentView: View {
@@ -29,7 +29,7 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 480, minHeight: 260)
-        .tint(Brand.orange)
+        .tint(Brand.copper)
         .toolbar {
             ToolbarItemGroup {
                 Picker("Run", selection: Binding(get: { store.maxConcurrent }, set: { store.setMaxConcurrent($0) })) {
@@ -83,14 +83,13 @@ struct JobRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
                     if let position = job.queuePosition, store.queueLength > 1 {
-                        Text("#\(position)")
-                            .font(.system(.caption, design: .rounded).weight(.bold).monospacedDigit())
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(position == 1 ? AnyShapeStyle(Brand.fire) : AnyShapeStyle(Brand.indigo)))
+                        Text("\(position)")
+                            .font(.caption2.weight(.medium).monospacedDigit())
+                            .foregroundStyle(position == 1 ? Brand.copper : .secondary)
+                            .frame(minWidth: 16, minHeight: 16)
+                            .overlay(Circle().strokeBorder(position == 1 ? Brand.copper : Brand.hairline, lineWidth: 1))
                     }
-                    Text(job.title).font(.system(.headline, design: .rounded)).lineLimit(1)
+                    Text(job.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                         .layoutPriority(1)
                     Text(job.outputName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         .truncationMode(.head)
@@ -113,12 +112,13 @@ struct JobRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 if state == .rendering {
                     Text(Format.duration(job.secondsRemaining(now: now)))
-                        .font(.system(.title2, design: .rounded).weight(.semibold).monospacedDigit())
-                        .foregroundStyle(Brand.fire)
-                    Text("remaining").font(.caption).foregroundStyle(.secondary)
+                        .font(.system(size: 22, weight: .light).monospacedDigit())
+                        .foregroundStyle(.primary)
+                    Text("REMAINING").font(.system(size: 9, weight: .medium)).tracking(1.2).foregroundStyle(.secondary)
                 } else {
-                    Text(state.label)
-                        .font(.system(.callout, design: .rounded).weight(.medium))
+                    Text(state.label.uppercased())
+                        .font(.system(size: 10, weight: .medium))
+                        .tracking(1.2)
                         .foregroundStyle(state.color)
                     if state == .queued, let start = job.expectedStart {
                         Text("starts \(Format.clock(start, relativeTo: now))")
@@ -177,13 +177,12 @@ struct JobRow: View {
         }
         .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color(nsColor: .controlBackgroundColor))
-                .shadow(color: .black.opacity(isHovered ? 0.12 : 0.05), radius: isHovered ? 8 : 3, y: 2)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(isHovered ? Brand.orange.opacity(0.5) : Color.primary.opacity(0.06), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isHovered ? Brand.copper.opacity(0.45) : Brand.hairline, lineWidth: 1)
         )
         .animation(.easeOut(duration: 0.15), value: isHovered)
         .contentShape(Rectangle())
@@ -222,11 +221,11 @@ struct JobDetail: View {
             let state = job.state(now: now)
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(job.title).font(.system(.headline, design: .rounded))
+                    Text(job.title).font(.system(.title3, design: .serif))
                     Spacer()
                     Text(state == .rendering ? Format.duration(remaining) + " left" : state.label)
-                        .font(.system(.headline, design: .rounded).monospacedDigit())
-                        .foregroundStyle(state == .rendering ? AnyShapeStyle(Brand.fire) : AnyShapeStyle(state.color))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(state == .rendering ? Color.primary : state.color)
                 }
                 .gridCellColumns(2)
                 RenderProgressBar(value: job.progress, active: state == .rendering)
@@ -310,13 +309,14 @@ struct StateIcon: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(state.color.opacity(showsControl ? 0.3 : 0.15))
+                .fill(showsControl ? state.color.opacity(0.12) : .clear)
+            Circle()
+                .strokeBorder(state.color.opacity(showsControl ? 0.8 : 0.45), lineWidth: 1)
             Image(systemName: symbol)
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(state == .rendering ? AnyShapeStyle(Brand.fire) : AnyShapeStyle(state.color))
-                .symbolEffect(.pulse, isActive: state == .rendering && !showsControl)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(state.color)
         }
-        .frame(width: 38, height: 38)
+        .frame(width: 30, height: 30)
         .contentShape(Circle())
     }
 
@@ -338,12 +338,10 @@ struct StateIcon: View {
 extension RenderJob.State {
     var color: Color {
         switch self {
-        case .rendering: Brand.orange
-        case .queued: Brand.indigo
-        case .paused: .yellow
-        case .finished: .green
-        case .stopped, .quitting: .red
-        case .idle, .cancelled: .secondary
+        case .rendering: Brand.copper
+        case .finished: Brand.sage
+        case .stopped, .quitting: Brand.brick
+        case .queued, .paused, .idle, .cancelled: .secondary
         }
     }
 }
@@ -353,14 +351,10 @@ struct UsagePill: View {
     let value: String
 
     var body: some View {
-        HStack(spacing: 3) {
-            Text(label).fontWeight(.semibold).foregroundStyle(Brand.orange)
-            Text(value).foregroundStyle(.primary.opacity(0.75))
+        HStack(spacing: 4) {
+            Text(label).font(.system(size: 9, weight: .medium)).tracking(1).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 11).monospacedDigit()).foregroundStyle(.primary.opacity(0.8))
         }
-        .font(.system(size: 10, design: .rounded).monospacedDigit())
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Capsule().fill(Color.primary.opacity(0.06)))
     }
 }
 
@@ -371,14 +365,13 @@ struct RenderProgressBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.primary.opacity(0.08))
+                Capsule().fill(Brand.wash)
                 Capsule()
-                    .fill(active ? AnyShapeStyle(Brand.fire) : AnyShapeStyle(Color.secondary.opacity(0.5)))
-                    .frame(width: max(6, geo.size.width * value))
-                    .shadow(color: active ? Brand.orange.opacity(0.6) : .clear, radius: 4)
+                    .fill(active ? Brand.copper : Color.secondary.opacity(0.35))
+                    .frame(width: max(3, geo.size.width * value))
             }
         }
-        .frame(height: 6)
+        .frame(height: 3)
     }
 }
 
@@ -386,29 +379,20 @@ struct HeaderView: View {
     let store: JobStore
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 44, height: 44)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Render Monitor")
-                    .font(.system(.title2, design: .rounded).weight(.bold))
-                    .foregroundStyle(.white)
-                Text(summary)
-                    .font(.system(.subheadline, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.7))
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("Render Monitor")
+                .font(.system(size: 22, weight: .regular, design: .serif))
             Spacer()
+            Text(summary)
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            ZStack {
-                Brand.night
-                RadialGradient(colors: [Brand.orange.opacity(0.25), .clear], center: .leading,
-                               startRadius: 0, endRadius: 260)
-            }
-        )
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Brand.hairline).frame(height: 1)
+        }
     }
 
     private var summary: String {
@@ -438,7 +422,7 @@ struct EmptyStateView: View {
                 .resizable()
                 .frame(width: 72, height: 72)
                 .opacity(0.9)
-            Text("No Blender renders yet").font(.system(.headline, design: .rounded))
+            Text("No Blender renders yet").font(.system(.title3, design: .serif))
             Text("Blender reports progress through a small hook script. Load it before your own script:")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
